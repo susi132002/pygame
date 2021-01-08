@@ -286,14 +286,14 @@ _ScrapGetTypes(PyObject *self)
     NSArray *types = [pb types];
 
     for (NSString *type in types) {
-        if (PyList_Append(l, PyUnicode_FromString([type UTF8String]))) {
+        if (PyList_Append(list, PyUnicode_FromString([type UTF8String]))) {
             Py_DECREF(list);
             [pool release];
             return NULL;
         }
     }
     [pool release];
-    return l;
+    return list;
 #endif
 }
 
