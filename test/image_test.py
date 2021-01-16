@@ -298,8 +298,8 @@ class ImageModuleTest(unittest.TestCase):
             self.assertEqual(s2.get_at((0, 0)), surf.get_at((0, 0)))
         finally:
             os.remove(temp_filename)
-    
-    def testLoadBytesIO(self):
+
+    def test_load_BytesIO(self):
         """ see if we can load a images with BytesIO.
         """
         files = ["data/alien1.png", "data/alien1.jpg", "data/alien1.gif", "data/fist.bmp"]

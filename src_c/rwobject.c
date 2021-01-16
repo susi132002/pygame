@@ -93,7 +93,7 @@ _pg_is_exception_class(PyObject *obj, void **optr)
         }
 
         oname = tmp;
-#endif
+#endif /* PY3 */
         PyErr_Format(PyExc_TypeError,
                      "Expected an exception class: got %.1024s",
                      Bytes_AS_STRING(oname));
@@ -107,14 +107,35 @@ _pg_is_exception_class(PyObject *obj, void **optr)
 static int
 _is_filelike_obj(PyObject *obj)
 {
+    int ret = 1;
+    PyObject *temp;
     if (!obj)
         return 0;
 
     /* These are the bare minimum conditions for an object to qualify
-     * as a valid file-like object */
-    return (PyObject_HasAttrString(obj, "read") &&
-        PyObject_HasAttrString(obj, "write") &&
-        PyObject_HasAttrString(obj, "seek"));
+     * as a usable valid file-like object */
+    if (!PyObject_HasAttrString(obj, "read")
+        || !PyObject_HasAttrString(obj, "write")
+        || !PyObject_HasAttrString(obj, "seek")
+#if PY2
+        || !PyObject_HasAttrString(obj, "tell")
+#endif
+    )
+        return 0;
+
+    /* SDL uses the seek method a lot, so bail out early if our object
+     * does not support seeking, rather than getting lots of errors
+     * later */
+    if (PyObject_HasAttrString(obj, "seekable")) {
+        temp = PyObject_CallMethod(obj, "seekable", NULL);
+        if (!temp) {
+            PyErr_Clear();
+            return 0;
+        }
+        ret = PyObject_IsTrue(temp);
+        Py_DECREF(temp);
+    }
+    return ret;
 }
 
 /* This function is meant to decode a pathlib object into its str/bytes representation.
@@ -268,59 +289,24 @@ pgRWops_IsFileObject(SDL_RWops *rw)
     return rw->close == _pg_rw_close;
 }
 
-/* Here we define a helper for the seek function */
-static pg_int_t
-_pg_rw_seek_helper(PyObject *fileobj, pg_int_t offset, int whence)
-{
-    pg_int_t retval;
-    PyObject *result;
-    /* Use the tell method, if available */
-    if (!offset && whence == SEEK_CUR && PyObject_HasAttrString(fileobj, "tell"))
-        result = PyObject_CallMethod(fileobj, "tell", NULL);
-    else {
-        /* Because offset can be a Sint64, cast it to a data type, that
-         * can hold all the data */
-        result = PyObject_CallMethod(fileobj, "seek", "Li",
-                                    (long long)offset, whence);
-    }
-
-    if (!result) {
-        PyErr_Print();
-        return -1;
-    }
-
-    retval = (pg_int_t)PyInt_AsLong(result);
-    Py_DECREF(result);
-    return retval;
-}
-
 #if IS_SDLv2
 static pg_int_t
 _pg_rw_size(SDL_RWops *context)
 {
-    PyObject *fileobj = (PyObject *)context->hidden.unknown.data1;
-    pg_int_t pos, ret = -1;
-#ifdef WITH_THREAD
-    PyGILState_STATE state = PyGILState_Ensure();
-#endif /* WITH_THREAD */
+    pg_int_t pos, ret;
 
     /* Current file position; need to restore it later. */
-    pos = _pg_rw_seek_helper(fileobj, 0, SEEK_CUR);
+    pos = SDL_RWseek(context, 0, SEEK_CUR);
     if (pos == -1)
-        goto end;
+        return -1;
 
-    /* Relocate to end of file */
-    ret = _pg_rw_seek_helper(fileobj, 0, SEEK_END);
+    /* Relocate to end of file, get size*/
+    ret = SDL_RWseek(context, 0, SEEK_END);
 
     /* return to original position */
-    if (_pg_rw_seek_helper(fileobj, pos, 0) == -1)
-        ret = -1;
+    if (SDL_RWseek(context, pos, SEEK_SET) == -1)
+        return -1;
 
-end:
-    /* Cleanup */
-#ifdef WITH_THREAD
-    PyGILState_Release(state);
-#endif
     return ret;
 }
 #endif /* IS_SDLv2 */
@@ -329,7 +315,6 @@ static pg_size_t
 _pg_rw_write(SDL_RWops *context, const void *ptr, pg_size_t size, pg_size_t num)
 {
     PyObject *result, *fileobj = (PyObject *)context->hidden.unknown.data1;
-
 #ifdef WITH_THREAD
     PyGILState_STATE state = PyGILState_Ensure();
 #endif
@@ -355,13 +340,33 @@ _pg_rw_write(SDL_RWops *context, const void *ptr, pg_size_t size, pg_size_t num)
 static pg_int_t
 _pg_rw_seek(SDL_RWops *context, pg_int_t offset, int whence)
 {
-    pg_int_t retval;
-    PyObject *fileobj = (PyObject *)context->hidden.unknown.data1;
-
+    pg_int_t retval = -1;
+    PyObject *result, *fileobj = (PyObject *)context->hidden.unknown.data1;
 #ifdef WITH_THREAD
     PyGILState_STATE state = PyGILState_Ensure();
 #endif
-    retval = _pg_rw_seek_helper(fileobj, offset, whence);
+
+    /* Because offset can be a Sint64, cast it to a data type, that
+     * can hold all the data */
+    result = PyObject_CallMethod(fileobj, "seek", "Li",
+                                    (long long)offset, whence);
+
+#if PY2
+    /* Some python2 file-like objects have a different seek implementation
+     * that does not return the offset, and returns None instead. So use
+     * tell method if that happens */
+    if (result == Py_None) {
+        Py_DECREF(result);
+        result = PyObject_CallMethod(fileobj, "tell", NULL);
+    }
+#endif /* PY2 */
+    if (result)
+        retval = (pg_int_t)PyLong_AsLong(result);
+
+    if (PyErr_Occurred())
+        PyErr_Print();
+
+    Py_XDECREF(result);
 #ifdef WITH_THREAD
     PyGILState_Release(state);
 #endif
@@ -371,25 +376,21 @@ _pg_rw_seek(SDL_RWops *context, pg_int_t offset, int whence)
 static pg_size_t
 _pg_rw_read(SDL_RWops *context, void *ptr, pg_size_t size, pg_size_t maxnum)
 {
-    pg_size_t retval;
+    pg_size_t retval = 0;
     PyObject *result, *fileobj = (PyObject *)context->hidden.unknown.data1;
 #ifdef WITH_THREAD
     PyGILState_STATE state = PyGILState_Ensure();
 #endif /* WITH_THREAD */
-    if (size < 0 || maxnum < 0)
-        goto end;
 
     result = PyObject_CallMethod(fileobj, "read", "k",
                                     (unsigned long)(size * maxnum));
     if (!result) {
         PyErr_Print();
-        retval = 0;
         goto end;
     }
 
     if (!Bytes_Check(result)) {
         Py_DECREF(result);
-        retval = 0;
         goto end;
     }
 
