@@ -396,6 +396,8 @@ static PyMethodDef macosx_builtins[] =
 
 MODINIT_DEFINE (sdlmain_osx)
 {
+    PyObject *module;
+
     /* create the module */
 #if PY3
     static struct PyModuleDef _module = {
@@ -418,8 +420,10 @@ MODINIT_DEFINE (sdlmain_osx)
     }
 
 #if PY3
-    MODINIT_RETURN(PyModule_Create(&_module));
+    module = PyModule_Create(&_module);
 #else
-    MODINIT_RETURN(Py_InitModule3(MODPREFIX "sdlmain_osx", macosx_builtins, NULL));
+    module = Py_InitModule3(MODPREFIX "sdlmain_osx", macosx_builtins, NULL);
 #endif
+
+MODINIT_RETURN(module);
 }
