@@ -65,6 +65,8 @@ typedef struct _display_state_s {
     Uint8 scaled_gl;
     int scaled_gl_w;
     int scaled_gl_h;
+    int fullscreen_backup_x;
+    int fullscreen_backup_y;
     SDL_bool auto_resize;
 } _DisplayState;
 
@@ -994,8 +996,8 @@ pg_set_mode(PyObject *self, PyObject *arg, PyObject *kwds)
     SDL_Surface *newownedsurf = NULL;
     int depth = 0;
     int flags = 0;
-    int w = 0;
-    int h = 0;
+    int w, h;
+    PyObject *size = NULL;
     int vsync = SDL_FALSE;
     /* display will get overwritten by ParseTupleAndKeywords only if display
        parameter is given. By default, put the new window on the same
@@ -1009,7 +1011,7 @@ pg_set_mode(PyObject *self, PyObject *arg, PyObject *kwds)
 
     scale_env = SDL_getenv("PYGAME_FORCE_SCALE");
 
-    if (!PyArg_ParseTupleAndKeywords(arg, kwds, "|(ii)iiii", keywords, &w, &h,
+    if (!PyArg_ParseTupleAndKeywords(arg, kwds, "|Oiiii", keywords, &size,
                                      &flags, &depth, &display, &vsync))
         return NULL;
 
@@ -1021,8 +1023,16 @@ pg_set_mode(PyObject *self, PyObject *arg, PyObject *kwds)
         }
     }
 
-    if (w < 0 || h < 0)
-        return RAISE(pgExc_SDLError, "Cannot set negative sized display mode");
+    if (size != NULL) {
+        if (!pg_TwoIntsFromObj(size, &w, &h))
+            return RAISE(PyExc_TypeError, "size must be two numbers");
+        if (w < 0 || h < 0)
+            return RAISE(pgExc_SDLError, "Cannot set negative sized display mode");
+    }
+    else {
+        w = 0;
+        h = 0;
+    }
 
     if (!SDL_WasInit(SDL_INIT_VIDEO)) {
         /*note SDL works special like this too*/
@@ -1148,7 +1158,22 @@ pg_set_mode(PyObject *self, PyObject *arg, PyObject *kwds)
 
             if (win) {
                 if (SDL_GetWindowDisplayIndex(win) == display) {
-                    SDL_GetWindowPosition(win, &x, &y);
+                    // fullscreen windows don't hold window x and y as needed
+                    if (SDL_GetWindowFlags(win) & (SDL_WINDOW_FULLSCREEN | SDL_WINDOW_FULLSCREEN_DESKTOP)) { 
+                        x = state->fullscreen_backup_x;
+                        y = state->fullscreen_backup_y;
+
+                        // if the program goes into fullscreen first the "saved x and y" are "undefined position"
+                        // that should be interpreted as a cue to center the window
+                        if (x == SDL_WINDOWPOS_UNDEFINED_DISPLAY(display))
+                            x = SDL_WINDOWPOS_CENTERED_DISPLAY(display);
+                        if (y == SDL_WINDOWPOS_UNDEFINED_DISPLAY(display))
+                            y = SDL_WINDOWPOS_CENTERED_DISPLAY(display);
+                    }
+                    else {
+                        SDL_GetWindowPosition(win, &x, &y);
+                    }
+                    
                 }
                 if (!(flags & PGS_OPENGL) !=
                     !(SDL_GetWindowFlags(win) & SDL_WINDOW_OPENGL)) {
@@ -1208,6 +1233,13 @@ pg_set_mode(PyObject *self, PyObject *arg, PyObject *kwds)
                 }
             }
 
+            // SDL doesn't preserve window position in fullscreen mode
+            // However, windows coming out of fullscreen need these to go back into the correct position
+            if (sdl_flags & (SDL_WINDOW_FULLSCREEN | SDL_WINDOW_FULLSCREEN_DESKTOP)) {
+                state->fullscreen_backup_x = x;
+                state->fullscreen_backup_y = y;
+            }
+
             if (!win) {
                 /*open window*/
                 win = SDL_CreateWindow(title, x, y, w_1, h_1, sdl_flags);
@@ -1216,6 +1248,12 @@ pg_set_mode(PyObject *self, PyObject *arg, PyObject *kwds)
                 init_flip = 1;
             }
             else {
+                /* set min size to (1,1) to erase any previously set min size
+                 * relevant for windows leaving SCALED, which sets a min size
+                 * only relevant on Windows, I believe.
+                 * See https://github.com/pygame/pygame/issues/2327 */
+                SDL_SetWindowMinimumSize(win, 1, 1);
+
                 /* change existing window.
                  this invalidates the display surface*/
                 SDL_SetWindowTitle(win, title);
@@ -1231,13 +1269,14 @@ pg_set_mode(PyObject *self, PyObject *arg, PyObject *kwds)
                 else if (flags & PGS_HIDDEN)
                     SDL_HideWindow(win);
 
-                SDL_SetWindowPosition(win, x, y);
                 if (0 !=
                     SDL_SetWindowFullscreen(
                         win, sdl_flags & (SDL_WINDOW_FULLSCREEN |
                                           SDL_WINDOW_FULLSCREEN_DESKTOP))) {
                     return RAISE(pgExc_SDLError, SDL_GetError());
                 }
+
+                SDL_SetWindowPosition(win, x, y);
 
                 assert(surface);
             }
@@ -1556,6 +1595,7 @@ pg_list_modes(PyObject *self, PyObject *args, PyObject *kwds)
     int bpp = 0;
     int flags = PGS_FULLSCREEN;
     int display_index = 0;
+    int last_width = -1, last_height = -1;
     PyObject *list, *size;
     int i;
 
@@ -1603,10 +1643,15 @@ pg_list_modes(PyObject *self, PyObject *args, PyObject *kwds)
             mode.h = 480;
         if (SDL_BITSPERPIXEL(mode.format) != bpp)
             continue;
+        if (last_width == mode.w && last_height == mode.h && last_width != -1) {
+            continue;
+        }
         if (!(size = Py_BuildValue("(ii)", mode.w, mode.h))) {
             Py_DECREF(list);
             return NULL;
         }
+        last_width = mode.w;
+        last_height = mode.h;
         if (0 != PyList_Append(list, size)) {
             Py_DECREF(list);
             Py_DECREF(size);
@@ -1701,20 +1746,28 @@ pg_set_mode(PyObject *self, PyObject *arg, PyObject *kwds)
     SDL_Surface *surf;
     int depth = 0;
     int flags = SDL_SWSURFACE;
-    int w = 0;
-    int h = 0;
+    int w, h;
+    PyObject *size = NULL;
     int display = 0;
     int hasbuf;
     char *title, *icontitle;
 
     char *keywords[] = {"size", "flags", "depth", "display", NULL};
 
-    if (!PyArg_ParseTupleAndKeywords(arg, kwds, "|(ii)iii", keywords, &w, &h,
+    if (!PyArg_ParseTupleAndKeywords(arg, kwds, "|Oiii", keywords, &size,
                                      &flags, &depth, &display))
         return NULL;
 
-    if (w < 0 || h < 0)
-        return RAISE(pgExc_SDLError, "Cannot set negative sized display mode");
+    if (size != NULL) {
+        if (!pg_TwoIntsFromObj(size, &w, &h))
+            return RAISE(PyExc_TypeError, "size must be two numbers");
+        if (w < 0 || h < 0)
+            return RAISE(pgExc_SDLError, "Cannot set negative sized display mode");
+    }
+    else {
+        w = 0;
+        h = 0;
+    }
 
     if (w == 0 || h == 0) {
         SDL_version versioninfo;
@@ -2164,7 +2217,7 @@ pg_set_gamma(PyObject *self, PyObject *arg)
         return PyErr_NoMemory();
     SDL_CalculateGammaRamp(r, gamma_ramp);
     SDL_CalculateGammaRamp(g, gamma_ramp + 256);
-    SDL_CalculateGammaRamp(b, gamma_ramp + 256);
+    SDL_CalculateGammaRamp(b, gamma_ramp + 512);
     if (win) {
         result = SDL_SetWindowGammaRamp(win, gamma_ramp, gamma_ramp + 256,
                                         gamma_ramp + 512);

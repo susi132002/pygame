@@ -46,8 +46,9 @@ change the default buffer by calling :func:`pygame.mixer.pre_init` before
 
    Initialize the mixer module for Sound loading and playback. The default
    arguments can be overridden to provide specific audio mixing. Keyword
-   arguments are accepted. For backward compatibility where an argument is set
-   zero the default value is used (possible changed by a pre_init call).
+   arguments are accepted. For backwards compatibility, argument values of 
+   0 are replaced with the startup defaults, except for ``allowedchanges``,
+   where -1 is used. (startup defaults may be changed by a :func:`pre_init` call).
 
    The size argument represents how many bits are used for each audio sample.
    If the value is negative then signed sample values will be used. Positive
@@ -87,13 +88,11 @@ change the default buffer by calling :func:`pygame.mixer.pre_init` before
    you cannot change the playback arguments without first calling
    ``pygame.mixer.quit()``.
 
-   .. versionchanged:: 1.8 The default ``buffersize`` was changed from 1024
-      to 3072.
-   .. versionchanged:: 1.9.1 The default ``buffersize`` was changed from 3072
-      to 4096.
-   .. versionchanged:: 2.0.0 The default ``buffersize`` was changed from 4096
-      to 512. The default frequency changed to 44100 from 22050.
-   .. versionchanged:: 2.0.0 ``size`` can be 32 (32bit floats).
+   .. versionchanged:: 1.8 The default ``buffersize`` changed from 1024 to 3072.
+   .. versionchanged:: 1.9.1 The default ``buffersize`` changed from 3072 to 4096.
+   .. versionchanged:: 2.0.0 The default ``buffersize`` changed from 4096 to 512. 
+   .. versionchanged:: 2.0.0 The default ``frequency`` changed from 22050 to 44100.
+   .. versionchanged:: 2.0.0 ``size`` can be 32 (32-bit floats).
    .. versionchanged:: 2.0.0 ``channels`` can also be 4 or 6.
    .. versionadded:: 2.0.0 ``allowedchanges`` argument added
 
@@ -102,21 +101,19 @@ change the default buffer by calling :func:`pygame.mixer.pre_init` before
 .. function:: pre_init
 
    | :sl:`preset the mixer init arguments`
-   | :sg:`pre_init(frequency=44100, size=-16, channels=2, buffer=512, devicename=None) -> None`
+   | :sg:`pre_init(frequency=44100, size=-16, channels=2, buffer=512, devicename=None, allowedchanges=AUDIO_ALLOW_FREQUENCY_CHANGE | AUDIO_ALLOW_CHANNELS_CHANGE) -> None`
 
    Call pre_init to change the defaults used when the real
    ``pygame.mixer.init()`` is called. Keyword arguments are accepted. The best
    way to set custom mixer playback values is to call
    ``pygame.mixer.pre_init()`` before calling the top level ``pygame.init()``.
-   For backward compatibility argument values of zero are replaced with the
-   startup defaults.
+   For backwards compatibility, argument values of 0 are replaced with the
+   startup defaults, except for ``allowedchanges``, where -1 is used.
 
-   .. versionchanged:: 1.8 The default ``buffersize`` was changed from 1024
-      to 3072.
-   .. versionchanged:: 1.9.1 The default ``buffersize`` was changed from 3072
-      to 4096.
-   .. versionchanged:: 2.0.0 The default ``buffersize`` was changed from 4096
-      to 512. The default frequency changed to 44100 from 22050.
+   .. versionchanged:: 1.8 The default ``buffersize`` changed from 1024 to 3072.
+   .. versionchanged:: 1.9.1 The default ``buffersize`` changed from 3072 to 4096.
+   .. versionchanged:: 2.0.0 The default ``buffersize`` changed from 4096 to 512. 
+   .. versionchanged:: 2.0.0 The default ``frequency`` changed from 22050 to 44100.
 
    .. ## pygame.mixer.pre_init ##
 
@@ -202,7 +199,7 @@ change the default buffer by calling :func:`pygame.mixer.pre_init` before
 .. function:: set_reserved
 
    | :sl:`reserve channels from being automatically used`
-   | :sg:`set_reserved(count) -> None`
+   | :sg:`set_reserved(count) -> count`
 
    The mixer can reserve any number of channels that will not be automatically
    selected for playback by Sounds. If sounds are currently playing on the
@@ -211,6 +208,9 @@ change the default buffer by calling :func:`pygame.mixer.pre_init` before
    This allows the application to reserve a specific number of channels for
    important sounds that must not be dropped or have a guaranteed channel to
    play on.
+
+   Will return number of channels actually reserved, this may be less than requested
+   depending on the number of channels previously allocated.
 
    .. ## pygame.mixer.set_reserved ##
 
@@ -223,9 +223,6 @@ change the default buffer by calling :func:`pygame.mixer.pre_init` before
    inactive Channels this function will return ``None``. If there are no
    inactive channels and the force argument is ``True``, this will find the
    Channel with the longest running Sound and return it.
-
-   If the mixer has reserved channels from ``pygame.mixer.set_reserved()`` then
-   those channels will not be returned here.
 
    .. ## pygame.mixer.find_channel ##
 
