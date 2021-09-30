@@ -34,7 +34,7 @@ entire library. Browse the documentation on the `docs page`_.
 
 The online documentation stays up to date with the development version
 of pygame on github.  This may be a bit newer than the version of pygame
-you are using. To upgrade to the latest full release, run 
+you are using. To upgrade to the latest version(full release), run 
 ``pip install pygame --upgrade`` in your terminal.
 
 Best of all, the examples directory has many playable small programs
@@ -44,7 +44,7 @@ which can get you started playing with the code right away.
 Building From Source
 --------------------
 
-If you want to use features that are currently in development,
+If you want to use features that are currently in development phase,
 or you want to contribute to pygame, you will need to build pygame
 locally from its source code, rather than pip installing it.
 
